@@ -250,7 +250,7 @@ class Signaling {
         _iceServers = {
           'iceServers': [
             {
-              'urls': _turnCredential['uris'][0],
+              's': _turnCredential['uris'][0],
               'username': _turnCredential['username'],
               'credential': _turnCredential['password']
             },
