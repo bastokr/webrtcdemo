@@ -10,7 +10,7 @@ Future<Map> getTurnCredential(String host, int port) async {
     return true;
   };
   var url = 'https://$host:$port/api/turn?service=turn&username=flutter-webrtc';
-  var request = await client.getUrl(Uri.parse());
+  var request = await client.getUrl(Uri.parse(url));
   var response = await request.close();
   var responseBody = await response.transform(Utf8Decoder()).join();
   print('getTurnCredential:response => $responseBody.');

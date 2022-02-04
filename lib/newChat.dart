@@ -1,115 +1,257 @@
-import 'dart:html';
+import 'dart:convert';
 
-import 'package:eventsource/eventsource.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:http/browser_client.dart';
 import 'dart:math';
-import 'package:http/http.dart' as http;
+import 'package:universal_html/html.dart' as html;
+import 'package:http/http.dart' as http2;
 
-class newChat extends StatefulWidget {
-  const newChat({Key? key}) : super(key: key);
+class NewChat extends StatefulWidget {
+  const NewChat({Key? key}) : super(key: key);
 
   @override
   _newChatState createState() => _newChatState();
 }
 
-Future<MediaStream> createStream(String media, bool userScreen) async {
-  final Map<String, dynamic> mediaConstraints = {
-    'audio': userScreen ? false : true,
-    'video': userScreen
-        ? true
-        : {
-            'mandatory': {
-              'minWidth':
-                  '640', // Provide your own width, height and frame rate here
-              'minHeight': '480',
-              'minFrameRate': '30',
-            },
-            'facingMode': 'user',
-            'optional': [],
-          }
-  };
-  Function(MediaStream stream)? onLocalStream;
-//var unique = Random()(100000 + Math.random() * 900000);
-  Random random = new Random();
-  var unique = random.nextInt(900000) + 100000;
-  MediaStream stream = userScreen
-      ? await navigator.mediaDevices.getDisplayMedia(mediaConstraints)
-      : await navigator.mediaDevices.getUserMedia(mediaConstraints);
-  onLocalStream?.call(stream);
-
-  EventSource eventSource;
-
-  // navigator.mediaDevices.getUserMedia(mediaConstraints).then((value) async {
-
-  eventSource = await EventSource.connect(
-      'serverGet.php?unique=' + unique.toString(),
-      client: new BrowserClient());
-  // listen for events
-  eventSource.listen((Event event) async {
-    var url = Uri.parse(
-        'https://luckytransportca.cafe24.com/webrtc/serverPost.php?unique=' +
-            unique.toString());
-
-    var response = await http.post(url,
-        headers: {"Content-Type": "Application/X-Www-Form-Urlencoded"},
-        body: event.data);
-    print('Response status: ${response.statusCode}');
-    print('Response body: ${response.body}');
-
-    print("New event:");
-    print("  event: ${event.event}");
-    print("  data: ${event.data}");
-  });
-
-  //});
-  return stream;
-}
-
-class _newChatState extends State<newChat> {
+class _newChatState extends State<NewChat> {
   RTCVideoRenderer _localRenderer = RTCVideoRenderer();
   RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
+  Random random = new Random();
+  MediaStream? _localStream;
+  RTCPeerConnection? pc;
+  var answer = false;
+  var unique;
+  late Stream myStream;
 
   @override
   initState() {
-    super.initState();
+    unique = random.nextInt(900000) + 100000;
     initRenderers();
+    super.initState();
+
     //  _connect();
   }
 
   initRenderers() async {
     await _localRenderer.initialize();
     await _remoteRenderer.initialize();
+    switchCamera();
+    await createStream(true, _localRenderer);
+    testSse(unique);
+    publish('client-call', '');
+    // setState(() {});
+  }
+
+  void switchCamera() {
+    if (_localStream != null) {
+      Helper.switchCamera(_localStream!.getVideoTracks()[0]);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      child: Stack(children: <Widget>[
-        Positioned(
-            left: 0.0,
-            right: 0.0,
-            top: 0.0,
-            bottom: 0.0,
-            child: Container(
+    return MaterialApp(
+        home: Scaffold(
+      appBar: AppBar(
+        title: Text('P2P Call Sample '),
+        actions: <Widget>[
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: null,
+            tooltip: 'setup',
+          ),
+        ],
+      ),
+      body: OrientationBuilder(builder: (context, orientation) {
+        return Container(
+          child: Row(children: <Widget>[
+            Container(
               margin: EdgeInsets.fromLTRB(0.0, 0.0, 0.0, 0.0),
-              width: MediaQuery.of(context).size.width,
-              height: MediaQuery.of(context).size.height,
+              width: 120.0,
+              height: 90.0,
               child: RTCVideoView(_remoteRenderer),
               decoration: BoxDecoration(color: Colors.black54),
-            )),
-        Positioned(
-          left: 20.0,
-          top: 20.0,
-          child: Container(
-            width: 90,
-            height: 120,
-            child: RTCVideoView(_localRenderer, mirror: true),
-            decoration: BoxDecoration(color: Colors.black54),
-          ),
-        ),
-      ]),
+            ),
+            Container(
+              width: 120.0,
+              height: 90.0,
+              child: RTCVideoView(_localRenderer, mirror: true),
+              decoration: BoxDecoration(color: Colors.black54),
+            ),
+          ]),
+        );
+      }),
+    ));
+  }
+
+  Future<void> testSse(unique) async {
+    final eventSource = html.EventSource(
+        'https://luckytransportca.cafe24.com/webrtc/serverGet.php?unique=' +
+            unique.toString(),
+        withCredentials: false);
+
+    eventSource.onMessage.listen((event) {
+      if (event.data.indexOf("_MULTIPLEVENTS_") > -1) {
+        var multiple = event.data.split("_MULTIPLEVENTS_");
+        for (var x = 0; x < multiple.length; x++) {
+          onsinglemessage(multiple[x]);
+
+          print(multiple[x]);
+        }
+      } else {
+        print(event.data);
+        onsinglemessage(event.data);
+      }
+    });
+  }
+
+  onsinglemessage(message) {
+    var package = json.decode(message);
+    var data = package['data'];
+    var candidateMap = data?['candidate'];
+    var description = data?['description'];
+    print("received single message: " + package['event']);
+
+    switch (package['event']) {
+      case 'client-call':
+        icecandidate(_localStream);
+        pc?.createOffer({}).then((desc) {
+          pc?.setLocalDescription(desc).then((value) => {
+                print(pc?.getLocalDescription()),
+                publish('client-offer', pc?.getLocalDescription())
+              });
+        }).onError((error, stackTrace) => null);
+        break;
+      case 'client-answer':
+        if (pc == null) {
+          print('Before processing the client-answer, I need a client-offer');
+          break;
+        }
+        pc?.setRemoteDescription(
+            new RTCSessionDescription(description['sdp'], description['type']));
+        break;
+      case 'client-offer':
+        icecandidate(_localStream);
+        pc
+            ?.setRemoteDescription(new RTCSessionDescription(
+                description['sdp'], description['type']))
+            .then((value) {
+          if (!answer) {
+            pc?.createAnswer().then((description) {
+              pc
+                  ?.setLocalDescription(description)
+                  .then((value) =>
+                      {publish('client-answer', pc?.getLocalDescription())})
+                  .onError((error, stackTrace) => {});
+            }).onError((error, stackTrace) {});
+
+            answer = true;
+          }
+        });
+        break;
+      case 'client-candidate':
+        if (pc == null) {
+          print('Before processing the client-answer, I need a client-offer');
+          break;
+        }
+
+        pc?.addCandidate(RTCIceCandidate(candidateMap['candidate'],
+            candidateMap['sdpMid'], int.parse(candidateMap['sdpMLineIndex'])));
+        break;
+    }
+  }
+
+  String get sdpSemantics =>
+      WebRTC.platformIsWindows ? 'plan-b' : 'unified-plan';
+
+  Map<String, dynamic> _iceServers = {
+    'iceServers': [
+      {'urls': 'stun:stun.stunprotocol.org:3478'},
+      {'urls': 'stun:stun.l.google.com:19302'},
+      /*
+       * turn server configuration example.
+      {
+        'url': 'turn:123.45.67.89:3478',
+        'username': 'change_to_real_user',
+        'credential': 'change_to_real_secret'
+      },
+      */
+    ]
+  };
+
+  final Map<String, dynamic> _config = {
+    'mandatory': {},
+    'optional': [
+      {'DtlsSrtpKeyAgreement': true},
+    ]
+  };
+
+  icecandidate(localStream) async {
+    pc = await createPeerConnection({
+      ..._iceServers,
+      ...{'sdpSemantics': {}}
+    }, _config);
+
+    pc?.onIceCandidate = (candidate) async {
+      if (candidate == null) {
+        print('onIceCandidate: complete!');
+        return;
+      }
+      // This delay is needed to allow enough time to try an ICE candidate
+      // before skipping to the next one. 1 second is just an heuristic value
+      // and should be thoroughly tested in your own environment.
+      publish('client-candidate', candidate.toString());
+    };
+
+    try {
+      pc?.addStream(localStream);
+    } catch (e) {
+      var tracks = localStream.getTracks();
+      for (var i = 0; i < tracks.length; i++) {
+        pc?.addTrack(tracks[i], localStream);
+      }
+    }
+    pc?.onTrack = (event) {
+      //  document.getElementById('remoteVideo').style.display="block";
+      // document.getElementById('localVideo').style.display="none";
+      //   _remoteRenderer.srcObject = event.streams[0];
+    };
+  }
+
+  publish(event, data) async {
+    print(
+        "==================================================================================================>");
+    print(jsonEncode(<String, String>{event: event, data: data}));
+    final response = await http2.post(
+      Uri.parse(
+          'https://luckytransportca.cafe24.com/webrtc/serverPost.php?unique=' +
+              unique.toString()),
+      headers: <String, String>{
+        'Content-Type': 'Application/X-Www-Form-Urlencoded',
+      },
+      body: jsonEncode(<String, String>{event: event, data: data}),
     );
+    print(response.statusCode);
+    print(response.body);
+    /*
+        console.log("sending ws.send: " + event);
+        ws.send(JSON.stringify({
+            event:event,
+            data:data 
+        })); 
+        */
+  }
+
+  createStream(bool userScreen, RTCVideoRenderer localRenderer) async {
+    final Map<String, dynamic> mediaConstraints = {
+      'audio': true,
+      'video': true
+    };
+
+    var stream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+
+    localRenderer.srcObject = stream;
+    _localStream = stream;
+    return stream;
   }
 }
