@@ -90,6 +90,8 @@ class _newChatState extends State<NewChat> {
             unique.toString(),
         withCredentials: false);
 
+    eventSource.addEventListener("send", (event) => {print("object")});
+
     eventSource.onMessage.listen((event) {
       if (event.data.indexOf("_MULTIPLEVENTS_") > -1) {
         var multiple = event.data.split("_MULTIPLEVENTS_");
@@ -110,7 +112,7 @@ class _newChatState extends State<NewChat> {
     var data = package['data'];
     var candidateMap = data?['candidate'];
     var description = data?['description'];
-    print("received single message: " + package['event']);
+    print("received single message: " + package['event']!);
 
     switch (package['event']) {
       case 'client-call':
@@ -220,8 +222,8 @@ class _newChatState extends State<NewChat> {
 
   publish(event, data) async {
     print(
-        "==================================================================================================>");
-    print(jsonEncode(<String, String>{event: event, data: data}));
+        "==================       ================================================>");
+    print(jsonEncode(<String, String>{'event': event, 'data': data}));
     final response = await http2.post(
       Uri.parse(
           'https://luckytransportca.cafe24.com/webrtc/serverPost.php?unique=' +
